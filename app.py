@@ -1,226 +1,419 @@
-
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 
-st.set_page_config(page_title="Leaflet + Wind Markers", layout="wide")
-st.markdown("### Leaflet Map with Altitude-Based Filtering and Wind Markers")
+st.set_page_config(page_title="Lightning Risk Zones", layout="wide")
+st.markdown("#### Lightning Risk Zones — Emergency Responders")
+st.caption("Interactive map using Leaflet, highlighting altitude-based lightning risk, optional heatmap, marker clustering, and adjustable buffer-based risk zones.")
 
-# Render the provided HTML (loads Leaflet & PapaParse from CDN).
-# Note: External JS/CSS are allowed in Streamlit components.
-st_html("""<!DOCTYPE html>
+st_html('''<!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>Leaflet Map with Filtered Points and Wind Markers</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lightning Risk Zones (Emergency Responders)</title>
 
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-    <!-- PapaParse for CSV Parsing -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+  <!-- Leaflet.markercluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 
-   <style>
-    #map {
-        height: 600px;
-        width: 800px;
-        margin-top: 20px;
-        position: relative; /* Added for relative positioning of the legend */
+  <!-- Leaflet.heat -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <!-- PapaParse -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+
+  <style>
+    :root { --sidebar-w: 320px; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    header { padding: 12px 16px; background:#0d47a1; color:white; }
+    header h2 { margin: 0; font-size: 18px; }
+    #app { display:flex; min-height: calc(100vh - 48px); }
+    #sidebar {
+      width: var(--sidebar-w);
+      padding: 12px;
+      box-shadow: 2px 0 6px rgba(0,0,0,0.08);
+      z-index: 999;
+      background: #fff;
     }
-    .filter-container {
-        margin: 10px;
-    }
+    #map { flex:1; height: calc(100vh - 48px); }
+    fieldset { border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; }
+    legend { padding:0 6px; font-weight:600; }
+    label { display:block; margin:8px 0 4px; font-size: 13px; }
+    select, input[type="range"], input[type="number"] { width:100%; }
+    .row { display:flex; gap:8px; }
+    .row > div { flex:1; }
     .legend {
-        position: absolute;
-        top: 100px;
-        left: 830px; /* Placing it next to the map */
-        background: white;
-        padding: 10px;
-        border-radius: 5px;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
-        width: 180px; /* Adjust width to fit content */
+      position: absolute; bottom: 16px; left: 16px; background: rgba(255,255,255,0.95);
+      padding:10px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.15); font-size:12px;
     }
-    .legend-item {
-        margin-bottom: 5px;
-        display: flex;
-        align-items: center;
+    .legend-item { display:flex; align-items:center; gap:8px; margin:4px 0; }
+    .color-box { width: 16px; height: 16px; border-radius: 3px; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#eee; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    button { cursor:pointer; padding:8px 10px; border:1px solid #d0d0d0; background:#fafafa; border-radius:8px; }
+    button:hover { background:#f0f0f0; }
+    .footer-note { font-size: 11px; color:#666; margin-top:8px; }
+    @media (max-width: 980px){
+      #app { flex-direction: column; }
+      #sidebar { width: auto; box-shadow: none; border-bottom:1px solid #eee; }
+      #map { height: 70vh; }
     }
-    .color-box {
-        width: 20px;
-        height: 20px;
-        margin-right: 10px;
-    }
-</style>
+  </style>
 </head>
 <body>
+  <header>
+    <h2>Lightning Risk Zones — Emergency Response Map</h2>
+  </header>
 
-<h3>Leaflet Map with Altitude-Based Filtering and Wind Markers</h3>
+  <div id="app">
+    <aside id="sidebar">
+      <fieldset>
+        <legend>Filters</legend>
+        <label for="altitude-filter">Altitude range</label>
+        <select id="altitude-filter">
+          <option value="all">All</option>
+          <option value="lt12">&lt; 12 km</option>
+          <option value="12-14">12–14 km</option>
+          <option value="14-16">14–16 km (Danger)</option>
+          <option value="gt16">&gt; 16 km</option>
+        </select>
+        <div class="row">
+          <div>
+            <label for="cluster-toggle">Marker clustering</label>
+            <select id="cluster-toggle">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div>
+            <label for="heat-toggle">Heatmap</label>
+            <select id="heat-toggle">
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </div>
+        </div>
+        <label for="time-window">Time window (hrs, if timestamp column exists)</label>
+        <input type="number" id="time-window" min="0" step="1" value="0" />
+        <span class="footer-note">Set 0 to ignore time filter. Looks for a column named <b>time</b> (ISO or epoch ms).</span>
+      </fieldset>
 
-<div class="filter-container">
-    <label for="altitude-filter">Select Altitude Range:</label>
-    <select id="altitude-filter">
-        <option value="all">All</option>
-        <option value="lt12">Less than 12 km</option>
-        <option value="12-14">12 - 14 km</option>
-        <option value="14-16">14 - 16 km (Danger)</option>
-        <option value="gt16">More than 16 km</option>
-    </select>
-</div>
+      <fieldset>
+        <legend>Risk Zones (buffers)</legend>
+        <label for="buf-low">Low (&lt;12 km) radius (km)</label>
+        <input type="range" id="buf-low" min="0" max="30" step="1" value="5" oninput="document.getElementById('buf-low-val').textContent=this.value">
+        <div><span class="pill">Current: <span id="buf-low-val">5</span> km</span></div>
 
-<div id="map"></div>
+        <label for="buf-med">Medium (12–14 km) radius (km)</label>
+        <input type="range" id="buf-med" min="0" max="30" step="1" value="10" oninput="document.getElementById('buf-med-val').textContent=this.value">
+        <div><span class="pill">Current: <span id="buf-med-val">10</span> km</span></div>
 
-<div class="legend">
-    <h4>Altitude Legend</h4>
-    <div class="legend-item"><span class="color-box" style="background:#ffe633;"></span> < 12 km</div>
-    <div class="legend-item"><span class="color-box" style="background:#ffc300;"></span> 12 - 14 km</div>
-    <div class="legend-item"><span class="color-box" style="background:#ff5733;"></span> 14 - 16 km</div>
-    <div class="legend-item"><span class="color-box" style="background:#c70039;"></span> > 16 km</div>
-   
-</div>
+        <label for="buf-high">High (14–16 km) radius (km)</label>
+        <input type="range" id="buf-high" min="0" max="50" step="1" value="20" oninput="document.getElementById('buf-high-val').textContent=this.value">
+        <div><span class="pill">Current: <span id="buf-high-val">20</span> km</span></div>
 
-<script>
-    // Initialize the map centered over Texas
-    var map = L.map('map').setView([30.7, -95.2], 10);
+        <label for="buf-extreme">Extreme (&gt;16 km) radius (km)</label>
+        <input type="range" id="buf-extreme" min="0" max="80" step="1" value="30" oninput="document.getElementById('buf-extreme-val').textContent=this.value">
+        <div><span class="pill">Current: <span id="buf-extreme-val">30</span> km</span></div>
 
-    // Add OpenStreetMap tile layer
+        <div class="actions" style="margin-top:8px;">
+          <button id="rebuild-zones">Rebuild risk zones</button>
+          <button id="download-zones">Download zones (GeoJSON)</button>
+          <button id="download-points">Download filtered points (GeoJSON)</button>
+        </div>
+      </fieldset>
+
+      <div class="footer-note">
+        Data: lightning (CSV) + wind events (CSV) from GitHub; tiles © OpenStreetMap. This tool highlights potential risk areas to assist decision-making; always corroborate with official guidance.
+      </div>
+    </aside>
+
+    <div id="map"></div>
+  </div>
+
+  <div class="legend" id="legend">
+    <div class="legend-item"><span class="color-box" style="background:#ffe633;"></span> &lt; 12 km (Low)</div>
+    <div class="legend-item"><span class="color-box" style="background:#ffc300;"></span> 12–14 km (Medium)</div>
+    <div class="legend-item"><span class="color-box" style="background:#ff5733;"></span> 14–16 km (High / Danger)</div>
+    <div class="legend-item"><span class="color-box" style="background:#c70039;"></span> &gt; 16 km (Extreme)</div>
+  </div>
+
+  <script>
+    // Map init
+    var map = L.map('map').setView([30.7, -95.2], 8);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
+      attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
-    // Store all markers globally to manage filtering
-    let markers = [];
-    let windMarkers = [];
+    // Layers
+    let allMarkers = []; // {marker, alt, time?, lat, lon, riskTier}
+    let clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 12 });
+    let plainGroup = L.layerGroup();
+    let heatLayer = null;
+    let riskZoneLayer = L.layerGroup().addTo(map); // circles
 
-    // Debounce utility function for smoother filtering
-    function debounce(func, delay) {
-        let timer;
-        return function(...args) {
-            clearTimeout(timer);
-            timer = setTimeout(() => func.apply(this, args), delay);
-        };
+    // Risk helpers
+    function riskColor(alt){
+      if (alt < 12000) return '#ffe633';
+      if (alt < 14000) return '#ffc300';
+      if (alt < 16000) return '#ff5733';
+      return '#c70039';
+    }
+    function riskTier(alt){
+      if (alt < 12000) return 'low';
+      if (alt < 14000) return 'med';
+      if (alt < 16000) return 'high';
+      return 'extreme';
+    }
+    function kmToMeters(km){ return km * 1000; }
+
+    // Debounce util
+    function debounce(fn, ms){
+      let t; return function(){ clearTimeout(t); t = setTimeout(()=>fn.apply(this, arguments), ms); };
     }
 
-    // Load all altitude data
-    function loadAltitudeData() {
+    // CSV loaders
+    function loadAltitudeCSV(){
+      return new Promise((resolve, reject)=>{
         Papa.parse('https://raw.githubusercontent.com/kyo330/HLMA/main/filtered_LYLOUT_230924_210000_0600.csv', {
-            download: true,
-            header: true,
-            complete: function(results) {
-                plotPoints(results.data);
-            },
-            error: function(error) {
-                console.error('Error loading altitude CSV:', error);
-            }
+          download:true, header:true,
+          complete: (res)=>resolve(res.data),
+          error: reject
         });
+      });
     }
-
-    // Load all wind data
-    function loadWindData() {
+    function loadWindCSV(){
+      return new Promise((resolve, reject)=>{
         Papa.parse('https://raw.githubusercontent.com/kyo330/HLMA/main/230924_rpts_wind.csv', {
-            download: true,
-            header: true,
-            complete: function(results) {
-                plotWindMarkers(results.data);
-            },
-            error: function(error) {
-                console.error('Error loading wind CSV:', error);
-            }
+          download:true, header:true,
+          complete: (res)=>resolve(res.data),
+          error: reject
         });
+      });
     }
 
-    // Function to determine marker color based on altitude
-    function getColor(alt) {
-        if (alt < 12000) return '#fff600';
-        else if (alt < 14000) return '#ff8f00';
-        else if (alt < 16000) return '#ff0505'; // Danger range
-        else return '#ff0505';
+    // Parse time if present
+    function parseTime(val){
+      if (!val) return null;
+      // try epoch ms
+      if (!isNaN(val)) {
+        const n = Number(val);
+        if (n > 1e10) return new Date(n);
+      }
+      // try ISO
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? null : d;
     }
 
-    // Function to determine marker size based on altitude
-    function getSize(alt) {
-        if (alt < 12000) return 1;
-        else if (alt < 14000) return 3;
-        else if (alt < 16000) return 6;
-        else return 9;
+    // Build points
+    function buildPoints(rows){
+      allMarkers = [];
+      (clusterGroup).clearLayers();
+      (plainGroup).clearLayers();
+
+      rows.forEach(r=>{
+        const lat = parseFloat(r.lat);
+        const lon = parseFloat(r.lon);
+        const alt = parseFloat(r.alt);
+        const t = parseTime(r.time); // optional
+
+        if (isNaN(lat) || isNaN(lon) || isNaN(alt)) return;
+
+        const color = riskColor(alt);
+        const tier = riskTier(alt);
+        const m = L.circleMarker([lat, lon], {
+          radius: tier==='low'? 3 : tier==='med'? 5 : tier==='high'? 7 : 9,
+          color, fillColor: color, fillOpacity: 0.85, opacity: 1, weight: 1
+        }).bindPopup(`<b>Altitude:</b> ${alt} m<br><b>Tier:</b> ${tier.toUpperCase()}<br>` + (t? `<b>Time:</b> ${t.toISOString()}<br>`:'' ) + `(${lat.toFixed(3)}, ${lon.toFixed(3)})`);
+
+        allMarkers.push({marker: m, alt, time: t, lat, lon, tier});
+      });
+
+      // default add to cluster
+      allMarkers.forEach(o=>clusterGroup.addLayer(o.marker));
+      clusterGroup.addTo(map);
     }
 
-    // Function to plot all altitude points
-    function plotPoints(data) {
-        data.forEach(function(row) {
-            const lat = parseFloat(row.lat);
-            const lon = parseFloat(row.lon);
-            const alt = parseFloat(row.alt);
-
-            if (!isNaN(lat) && !isNaN(lon) && !isNaN(alt)) {
-                const marker = L.circleMarker([lat, lon], {
-                    radius: getSize(alt),
-                    color: getColor(alt),
-                    opacity: 1,
-                    fillOpacity: 0.8
-                }).bindPopup(`<b>Altitude:</b> ${alt} meters<br>(${lat}, ${lon})`);
-
-                markers.push({ marker, alt });
-                marker.addTo(map);
-            }
-        });
+    // Wind markers (W icon)
+    let windLayer = L.layerGroup().addTo(map);
+    function buildWindMarkers(rows){
+      windLayer.clearLayers();
+      rows.forEach(r=>{
+        const lat = parseFloat(r.Lat);
+        const lon = parseFloat(r.Lon);
+        const comments = r.Comments;
+        if (isNaN(lat) || isNaN(lon)) return;
+        const wind = L.marker([lat, lon], {
+          icon: L.divIcon({
+            className: 'wind-icon',
+            html: '<span style="color:blue; font-weight:700; font-size:20px;">W</span>',
+            iconSize: [24,24],
+            iconAnchor: [12,12]
+          })
+        }).bindPopup(`<b>Wind Event:</b> ${comments || 'N/A'}<br>(${lat.toFixed(3)}, ${lon.toFixed(3)})`);
+        wind.addTo(windLayer);
+      });
     }
 
-    // Function to plot all wind markers
-    function plotWindMarkers(data) {
-    data.forEach(function(row) {
-        const lat = parseFloat(row.Lat);
-        const lon = parseFloat(row.Lon);
-        const comments = row.Comments;
+    // Filtering
+    function passAltitude(alt, range){
+      if (range==='lt12') return alt < 12000;
+      if (range==='12-14') return alt >= 12000 && alt < 14000;
+      if (range==='14-16') return alt >= 14000 && alt < 16000;
+      if (range==='gt16') return alt >= 16000;
+      return true;
+    }
+    function passTime(t, hours){
+      if (!hours || hours<=0 || !t) return true;
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - hours*3600*1000);
+      return t >= cutoff;
+    }
 
-        if (!isNaN(lat) && !isNaN(lon)) {
-            const windMarker = L.marker([lat, lon], {
-                icon: L.divIcon({
-                    className: 'wind-icon',
-                    html: '<span style="color:blue; font-weight: bold; font-size:24px;">W</span>', // Increased font size
-                    iconSize: [30, 30], // Adjust icon size to ensure larger visual space
-                    iconAnchor: [15, 15] // Center the marker on the correct lat-long
-                })
-            }).bindPopup(`<b>Wind Event:</b> ${comments}<br>(${lat}, ${lon})`);
+    function applyFilters(){
+      const altRange = document.getElementById('altitude-filter').value;
+      const cluster = document.getElementById('cluster-toggle').value === 'on';
+      const heat = document.getElementById('heat-toggle').value === 'on';
+      const hours = parseInt(document.getElementById('time-window').value || '0', 10);
 
-            windMarkers.push(windMarker);
-            windMarker.addTo(map);
+      // clear layers
+      clusterGroup.clearLayers();
+      plainGroup.clearLayers();
+
+      const ptsForHeat = [];
+
+      allMarkers.forEach(o=>{
+        const ok = passAltitude(o.alt, altRange) && passTime(o.time, hours);
+        if (ok){
+          if (cluster) clusterGroup.addLayer(o.marker);
+          else plainGroup.addLayer(o.marker);
+          ptsForHeat.push([o.lat, o.lon, 0.5 + Math.min(1, Math.max(0, (o.alt-10000)/8000)) ]); // weight by alt
         }
-    });
-}
+      });
 
+      // attach correct point layer
+      if (cluster){
+        if (!map.hasLayer(clusterGroup)) clusterGroup.addTo(map);
+        if (map.hasLayer(plainGroup)) map.removeLayer(plainGroup);
+      } else {
+        if (!map.hasLayer(plainGroup)) plainGroup.addTo(map);
+        if (map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
+      }
 
-    // Load both data sets immediately on page load
-    loadAltitudeData();
-    loadWindData();
-
-    // Event listener for the filter dropdown with debounced filtering
-    document.getElementById('altitude-filter').addEventListener('change', debounce(function(e) {
-        filterMarkers(e.target.value);
-    }, 200));
-
-    // Filter markers based on altitude range and set non-matching markers to faint grey
-    function filterMarkers(range) {
-        markers.forEach(({ marker, alt }) => {
-            const isVisible = {
-                'lt12': alt < 12000,
-                '12-14': alt >= 12000 && alt < 14000,
-                '14-16': alt >= 14000 && alt < 16000,
-                'gt16': alt >= 16000
-            }[range] ?? true;
-
-            if (isVisible) {
-                // Highlight matching markers
-                marker.setStyle({ fillOpacity: 0.8, color: getColor(alt), opacity: 1 });
-            } else {
-                // Faint grey for non-matching markers
-                marker.setStyle({ fillOpacity: 0.05, color: 'grey', opacity: 0.05 });
-            }
-        });
+      // heat
+      if (heat){
+        if (heatLayer) map.removeLayer(heatLayer);
+        heatLayer = L.heatLayer(ptsForHeat, { radius: 25, blur: 20, maxZoom: 11 });
+        heatLayer.addTo(map);
+      } else {
+        if (heatLayer){ map.removeLayer(heatLayer); heatLayer = null; }
+      }
     }
 
-</script>
+    // Risk zones (buffers by tier)
+    function rebuildRiskZones(){
+      riskZoneLayer.clearLayers();
+      const low = Number(document.getElementById('buf-low').value);
+      const med = Number(document.getElementById('buf-med').value);
+      const high = Number(document.getElementById('buf-high').value);
+      const extreme = Number(document.getElementById('buf-extreme').value);
+      const altRange = document.getElementById('altitude-filter').value;
+      const hours = parseInt(document.getElementById('time-window').value || '0', 10);
 
+      const tierRadius = { low, med, high, extreme };
+
+      allMarkers.forEach(o=>{
+        if (!(passAltitude(o.alt, altRange) && passTime(o.time, hours))) return;
+        const km = tierRadius[o.tier] || 0;
+        if (km <= 0) return;
+        const circle = L.circle([o.lat, o.lon], {
+          radius: kmToMeters(km),
+          color: riskColor(o.alt),
+          fillColor: riskColor(o.alt),
+          fillOpacity: 0.08,
+          weight: 1,
+          dashArray: '4,4'
+        }).bindPopup(`<b>Risk zone:</b> ${o.tier.toUpperCase()}<br>Radius: ${km} km`);
+        circle.addTo(riskZoneLayer);
+      });
+    }
+
+    // GeoJSON export helpers
+    function toGeoJSONPoints(){
+      const altRange = document.getElementById('altitude-filter').value;
+      const hours = parseInt(document.getElementById('time-window').value || '0', 10);
+      const feats = allMarkers.filter(o=>passAltitude(o.alt, altRange) && passTime(o.time, hours)).map(o=>({
+        type:'Feature',
+        geometry:{ type:'Point', coordinates:[o.lon, o.lat] },
+        properties:{ altitude:o.alt, tier:o.tier, time: o.time? o.time.toISOString(): null }
+      }));
+      return { type:'FeatureCollection', features: feats };
+    }
+
+    function toGeoJSONZones(){
+      // export each circle as a polygon approximation
+      const feats = [];
+      riskZoneLayer.eachLayer(function(layer){
+        if (layer.getLatLng){
+          const center = layer.getLatLng();
+          const radius = layer.getRadius();
+          // approximate circle as 64-vertex polygon
+          const N = 64;
+          const coords = [];
+          for (let i=0;i<N;i++){
+            const angle = (i/N) * 2*Math.PI;
+            // approximate using simple offsets (not geodesic accurate, but acceptable for moderate radii)
+            const dx = (radius/111320) * Math.cos(angle); // deg lon at equator ~111.32km
+            const dy = (radius/110540) * Math.sin(angle); // deg lat ~110.54km
+            coords.push([center.lng + dx/Math.cos(center.lat*Math.PI/180), center.lat + dy]);
+          }
+          coords.push(coords[0]);
+          feats.push({
+            type:'Feature',
+            geometry:{ type:'Polygon', coordinates:[coords.map(([x,y])=>[x,y])] },
+            properties:{ radius_m: radius }
+          });
+        }
+      });
+      return { type:'FeatureCollection', features: feats };
+    }
+
+    function downloadJSON(obj, filename){
+      const blob = new Blob([JSON.stringify(obj)], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }
+
+    // Wire UI
+    document.getElementById('altitude-filter').addEventListener('change', debounce(()=>{ applyFilters(); }, 150));
+    document.getElementById('cluster-toggle').addEventListener('change', ()=> applyFilters());
+    document.getElementById('heat-toggle').addEventListener('change', ()=> applyFilters());
+    document.getElementById('time-window').addEventListener('change', debounce(()=>{ applyFilters(); }, 150));
+
+    document.getElementById('rebuild-zones').addEventListener('click', ()=> rebuildRiskZones());
+    document.getElementById('download-points').addEventListener('click', ()=> downloadJSON(toGeoJSONPoints(), 'filtered_points.geojson'));
+    document.getElementById('download-zones').addEventListener('click', ()=> downloadJSON(toGeoJSONZones(), 'risk_zones.geojson'));
+
+    // Load data
+    Promise.all([loadAltitudeCSV(), loadWindCSV()]).then(([altRows, windRows])=>{
+      buildPoints(altRows);
+      buildWindMarkers(windRows);
+      applyFilters();
+      rebuildRiskZones();
+    }).catch(err=>{
+      console.error('Data load error:', err);
+      alert('Failed to load data from GitHub CSV. Check network or URLs.');
+    });
+  </script>
 </body>
 </html>
-""", height=750, scrolling=True)
+''', height=800, scrolling=True)
