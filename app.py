@@ -1,16 +1,17 @@
+
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 
-st.set_page_config(page_title="Lightning Risk Zones", layout="wide")
-st.markdown("#### Lightning Risk Zones — Emergency Responders")
-st.caption("Interactive map using Leaflet, highlighting altitude-based lightning risk, optional heatmap, marker clustering, and adjustable buffer-based risk zones.")
+st.set_page_config(page_title="Lightning — Fixed Area", layout="wide")
+st.markdown("#### Lightning — Fixed Area (Emergency Response)")
+st.caption("Interactive map with altitude-based coloring, clustering, heatmap, recent-strike filtering, wind markers, strike summary, and CSV download of filtered points.")
 
 st_html('''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lightning Risk Zones (Emergency Responders)</title>
+  <title>Lightning Map — Emergency Response (Fixed Area)</title>
 
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -40,21 +41,26 @@ st_html('''<!DOCTYPE html>
       z-index: 999;
       background: #fff;
     }
-    #map { flex:1; height: calc(100vh - 48px); }
+    #map { flex:1; height: calc(100vh - 48px); position: relative; }
     fieldset { border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; }
     legend { padding:0 6px; font-weight:600; }
     label { display:block; margin:8px 0 4px; font-size: 13px; }
-    select, input[type="range"], input[type="number"] { width:100%; }
+    select, input[type="number"] { width:100%; }
     .row { display:flex; gap:8px; }
     .row > div { flex:1; }
+    .summary {
+      position: absolute; top: 16px; left: 16px; background: rgba(255,255,255,0.95);
+      padding:10px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.15); font-size:12px;
+      min-width: 220px;
+    }
+    .summary h4 { margin: 0 0 6px 0; font-size: 13px; }
+    .stat { display:flex; justify-content: space-between; margin: 2px 0; }
     .legend {
       position: absolute; bottom: 16px; left: 16px; background: rgba(255,255,255,0.95);
       padding:10px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.15); font-size:12px;
     }
     .legend-item { display:flex; align-items:center; gap:8px; margin:4px 0; }
     .color-box { width: 16px; height: 16px; border-radius: 3px; }
-    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#eee; }
-    .actions { display:flex; gap:8px; flex-wrap:wrap; }
     button { cursor:pointer; padding:8px 10px; border:1px solid #d0d0d0; background:#fafafa; border-radius:8px; }
     button:hover { background:#f0f0f0; }
     .footer-note { font-size: 11px; color:#666; margin-top:8px; }
@@ -62,12 +68,13 @@ st_html('''<!DOCTYPE html>
       #app { flex-direction: column; }
       #sidebar { width: auto; box-shadow: none; border-bottom:1px solid #eee; }
       #map { height: 70vh; }
+      .summary { position: static; margin: 8px; }
     }
   </style>
 </head>
 <body>
   <header>
-    <h2>Lightning Risk Zones — Emergency Response Map</h2>
+    <h2>Lightning — Fixed Area (Emergency Response)</h2>
   </header>
 
   <div id="app">
@@ -82,6 +89,7 @@ st_html('''<!DOCTYPE html>
           <option value="14-16">14–16 km (Danger)</option>
           <option value="gt16">&gt; 16 km</option>
         </select>
+
         <div class="row">
           <div>
             <label for="cluster-toggle">Marker clustering</label>
@@ -98,42 +106,34 @@ st_html('''<!DOCTYPE html>
             </select>
           </div>
         </div>
-        <label for="time-window">Time window (hrs, if timestamp column exists)</label>
-        <input type="number" id="time-window" min="0" step="1" value="0" />
+
+        <label for="recent-mins">Show strikes from last (minutes)</label>
+        <input type="number" id="recent-mins" min="0" step="5" value="0" />
         <span class="footer-note">Set 0 to ignore time filter. Looks for a column named <b>time</b> (ISO or epoch ms).</span>
       </fieldset>
 
       <fieldset>
-        <legend>Risk Zones (buffers)</legend>
-        <label for="buf-low">Low (&lt;12 km) radius (km)</label>
-        <input type="range" id="buf-low" min="0" max="30" step="1" value="5" oninput="document.getElementById('buf-low-val').textContent=this.value">
-        <div><span class="pill">Current: <span id="buf-low-val">5</span> km</span></div>
-
-        <label for="buf-med">Medium (12–14 km) radius (km)</label>
-        <input type="range" id="buf-med" min="0" max="30" step="1" value="10" oninput="document.getElementById('buf-med-val').textContent=this.value">
-        <div><span class="pill">Current: <span id="buf-med-val">10</span> km</span></div>
-
-        <label for="buf-high">High (14–16 km) radius (km)</label>
-        <input type="range" id="buf-high" min="0" max="50" step="1" value="20" oninput="document.getElementById('buf-high-val').textContent=this.value">
-        <div><span class="pill">Current: <span id="buf-high-val">20</span> km</span></div>
-
-        <label for="buf-extreme">Extreme (&gt;16 km) radius (km)</label>
-        <input type="range" id="buf-extreme" min="0" max="80" step="1" value="30" oninput="document.getElementById('buf-extreme-val').textContent=this.value">
-        <div><span class="pill">Current: <span id="buf-extreme-val">30</span> km</span></div>
-
-        <div class="actions" style="margin-top:8px;">
-          <button id="rebuild-zones">Rebuild risk zones</button>
-          <button id="download-zones">Download zones (GeoJSON)</button>
-          <button id="download-points">Download filtered points (GeoJSON)</button>
-        </div>
+        <legend>Downloads</legend>
+        <button id="download-points">Download filtered points (CSV)</button>
       </fieldset>
 
       <div class="footer-note">
-        Data: lightning (CSV) + wind events (CSV) from GitHub; tiles © OpenStreetMap. This tool highlights potential risk areas to assist decision-making; always corroborate with official guidance.
+        Data pulled via CSV from GitHub; tiles © OpenStreetMap. Use for awareness; confirm with official guidance.
       </div>
     </aside>
 
-    <div id="map"></div>
+    <div id="map">
+      <div class="summary" id="summary">
+        <h4>Strike Summary</h4>
+        <div class="stat"><span>Total (all data):</span><strong id="sum-total">0</strong></div>
+        <div class="stat"><span>Visible (filters):</span><strong id="sum-visible">0</strong></div>
+        <hr>
+        <div class="stat"><span>&lt; 12 km:</span><strong id="sum-low">0</strong></div>
+        <div class="stat"><span>12–14 km:</span><strong id="sum-med">0</strong></div>
+        <div class="stat"><span>14–16 km:</span><strong id="sum-high">0</strong></div>
+        <div class="stat"><span>&gt; 16 km:</span><strong id="sum-extreme">0</strong></div>
+      </div>
+    </div>
   </div>
 
   <div class="legend" id="legend">
@@ -144,18 +144,18 @@ st_html('''<!DOCTYPE html>
   </div>
 
   <script>
-    // Map init
+    // Map init (fixed area)
     var map = L.map('map').setView([30.7, -95.2], 8);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
     // Layers
-    let allMarkers = []; // {marker, alt, time?, lat, lon, riskTier}
+    let allMarkers = []; // {marker, alt, time?, lat, lon, tier}
     let clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 12 });
     let plainGroup = L.layerGroup();
     let heatLayer = null;
-    let riskZoneLayer = L.layerGroup().addTo(map); // circles
+    let windLayer = L.layerGroup().addTo(map);
 
     // Risk helpers
     function riskColor(alt){
@@ -170,7 +170,6 @@ st_html('''<!DOCTYPE html>
       if (alt < 16000) return 'high';
       return 'extreme';
     }
-    function kmToMeters(km){ return km * 1000; }
 
     // Debounce util
     function debounce(fn, ms){
@@ -200,12 +199,10 @@ st_html('''<!DOCTYPE html>
     // Parse time if present
     function parseTime(val){
       if (!val) return null;
-      // try epoch ms
       if (!isNaN(val)) {
         const n = Number(val);
         if (n > 1e10) return new Date(n);
       }
-      // try ISO
       const d = new Date(val);
       return isNaN(d.getTime()) ? null : d;
     }
@@ -237,10 +234,12 @@ st_html('''<!DOCTYPE html>
       // default add to cluster
       allMarkers.forEach(o=>clusterGroup.addLayer(o.marker));
       clusterGroup.addTo(map);
+
+      // Update total
+      document.getElementById('sum-total').textContent = allMarkers.length;
     }
 
     // Wind markers (W icon)
-    let windLayer = L.layerGroup().addTo(map);
     function buildWindMarkers(rows){
       windLayer.clearLayers();
       rows.forEach(r=>{
@@ -260,7 +259,7 @@ st_html('''<!DOCTYPE html>
       });
     }
 
-    // Filtering
+    // Filtering helpers
     function passAltitude(alt, range){
       if (range==='lt12') return alt < 12000;
       if (range==='12-14') return alt >= 12000 && alt < 14000;
@@ -268,35 +267,39 @@ st_html('''<!DOCTYPE html>
       if (range==='gt16') return alt >= 16000;
       return true;
     }
-    function passTime(t, hours){
-      if (!hours || hours<=0 || !t) return true;
+    function passRecent(t, mins){
+      if (!mins || mins<=0 || !t) return true;
       const now = new Date();
-      const cutoff = new Date(now.getTime() - hours*3600*1000);
+      const cutoff = new Date(now.getTime() - mins*60*1000);
       return t >= cutoff;
     }
 
+    // Apply filters + update layers + summary
     function applyFilters(){
       const altRange = document.getElementById('altitude-filter').value;
       const cluster = document.getElementById('cluster-toggle').value === 'on';
       const heat = document.getElementById('heat-toggle').value === 'on';
-      const hours = parseInt(document.getElementById('time-window').value || '0', 10);
+      const mins = parseInt(document.getElementById('recent-mins').value || '0', 10);
 
-      // clear layers
       clusterGroup.clearLayers();
       plainGroup.clearLayers();
+      if (heatLayer){ map.removeLayer(heatLayer); heatLayer = null; }
 
       const ptsForHeat = [];
+      let visible = 0, cLow=0, cMed=0, cHigh=0, cExtreme=0;
 
       allMarkers.forEach(o=>{
-        const ok = passAltitude(o.alt, altRange) && passTime(o.time, hours);
+        const ok = passAltitude(o.alt, altRange) && passRecent(o.time, mins);
         if (ok){
+          visible++;
+          if (o.tier==='low') cLow++; else if (o.tier==='med') cMed++; else if (o.tier==='high') cHigh++; else cExtreme++;
           if (cluster) clusterGroup.addLayer(o.marker);
           else plainGroup.addLayer(o.marker);
-          ptsForHeat.push([o.lat, o.lon, 0.5 + Math.min(1, Math.max(0, (o.alt-10000)/8000)) ]); // weight by alt
+          ptsForHeat.push([o.lat, o.lon, 0.5 + Math.min(1, Math.max(0, (o.alt-10000)/8000)) ]);
         }
       });
 
-      // attach correct point layer
+      // attach correct layer
       if (cluster){
         if (!map.hasLayer(clusterGroup)) clusterGroup.addTo(map);
         if (map.hasLayer(plainGroup)) map.removeLayer(plainGroup);
@@ -307,113 +310,58 @@ st_html('''<!DOCTYPE html>
 
       // heat
       if (heat){
-        if (heatLayer) map.removeLayer(heatLayer);
         heatLayer = L.heatLayer(ptsForHeat, { radius: 25, blur: 20, maxZoom: 11 });
         heatLayer.addTo(map);
-      } else {
-        if (heatLayer){ map.removeLayer(heatLayer); heatLayer = null; }
       }
+
+      // summary
+      document.getElementById('sum-visible').textContent = visible;
+      document.getElementById('sum-low').textContent = cLow;
+      document.getElementById('sum-med').textContent = cMed;
+      document.getElementById('sum-high').textContent = cHigh;
+      document.getElementById('sum-extreme').textContent = cExtreme;
     }
 
-    // Risk zones (buffers by tier)
-    function rebuildRiskZones(){
-      riskZoneLayer.clearLayers();
-      const low = Number(document.getElementById('buf-low').value);
-      const med = Number(document.getElementById('buf-med').value);
-      const high = Number(document.getElementById('buf-high').value);
-      const extreme = Number(document.getElementById('buf-extreme').value);
-      const altRange = document.getElementById('altitude-filter').value;
-      const hours = parseInt(document.getElementById('time-window').value || '0', 10);
-
-      const tierRadius = { low, med, high, extreme };
-
-      allMarkers.forEach(o=>{
-        if (!(passAltitude(o.alt, altRange) && passTime(o.time, hours))) return;
-        const km = tierRadius[o.tier] || 0;
-        if (km <= 0) return;
-        const circle = L.circle([o.lat, o.lon], {
-          radius: kmToMeters(km),
-          color: riskColor(o.alt),
-          fillColor: riskColor(o.alt),
-          fillOpacity: 0.08,
-          weight: 1,
-          dashArray: '4,4'
-        }).bindPopup(`<b>Risk zone:</b> ${o.tier.toUpperCase()}<br>Radius: ${km} km`);
-        circle.addTo(riskZoneLayer);
-      });
-    }
-
-    // GeoJSON export helpers
-    function toGeoJSONPoints(){
-      const altRange = document.getElementById('altitude-filter').value;
-      const hours = parseInt(document.getElementById('time-window').value || '0', 10);
-      const feats = allMarkers.filter(o=>passAltitude(o.alt, altRange) && passTime(o.time, hours)).map(o=>({
-        type:'Feature',
-        geometry:{ type:'Point', coordinates:[o.lon, o.lat] },
-        properties:{ altitude:o.alt, tier:o.tier, time: o.time? o.time.toISOString(): null }
-      }));
-      return { type:'FeatureCollection', features: feats };
-    }
-
-    function toGeoJSONZones(){
-      // export each circle as a polygon approximation
-      const feats = [];
-      riskZoneLayer.eachLayer(function(layer){
-        if (layer.getLatLng){
-          const center = layer.getLatLng();
-          const radius = layer.getRadius();
-          // approximate circle as 64-vertex polygon
-          const N = 64;
-          const coords = [];
-          for (let i=0;i<N;i++){
-            const angle = (i/N) * 2*Math.PI;
-            // approximate using simple offsets (not geodesic accurate, but acceptable for moderate radii)
-            const dx = (radius/111320) * Math.cos(angle); // deg lon at equator ~111.32km
-            const dy = (radius/110540) * Math.sin(angle); // deg lat ~110.54km
-            coords.push([center.lng + dx/Math.cos(center.lat*Math.PI/180), center.lat + dy]);
-          }
-          coords.push(coords[0]);
-          feats.push({
-            type:'Feature',
-            geometry:{ type:'Polygon', coordinates:[coords.map(([x,y])=>[x,y])] },
-            properties:{ radius_m: radius }
-          });
-        }
-      });
-      return { type:'FeatureCollection', features: feats };
-    }
-
-    function downloadJSON(obj, filename){
-      const blob = new Blob([JSON.stringify(obj)], {type: 'application/json'});
+    // CSV download of filtered points
+    function downloadCSV(rows, filename) {
+      const csvContent = rows.map(r => r.map(x => (typeof x === 'string' && x.includes(',')) ? ('"' + x.replace(/"/g,'""') + '"') : x).join(",")).join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = filename;
-      document.body.appendChild(a); a.click();
-      URL.revokeObjectURL(url);
+      document.body.appendChild(a);
+      a.click();
       document.body.removeChild(a);
     }
 
-    // Wire UI
-    document.getElementById('altitude-filter').addEventListener('change', debounce(()=>{ applyFilters(); }, 150));
-    document.getElementById('cluster-toggle').addEventListener('change', ()=> applyFilters());
-    document.getElementById('heat-toggle').addEventListener('change', ()=> applyFilters());
-    document.getElementById('time-window').addEventListener('change', debounce(()=>{ applyFilters(); }, 150));
+    document.getElementById('download-points').addEventListener('click', ()=>{
+      const altRange = document.getElementById('altitude-filter').value;
+      const mins = parseInt(document.getElementById('recent-mins').value || '0', 10);
 
-    document.getElementById('rebuild-zones').addEventListener('click', ()=> rebuildRiskZones());
-    document.getElementById('download-points').addEventListener('click', ()=> downloadJSON(toGeoJSONPoints(), 'filtered_points.geojson'));
-    document.getElementById('download-zones').addEventListener('click', ()=> downloadJSON(toGeoJSONZones(), 'risk_zones.geojson'));
+      const rows = [["lat","lon","altitude_m","tier","time_iso"]];
+      allMarkers.forEach(o=>{
+        if (passAltitude(o.alt, altRange) && passRecent(o.time, mins)) {
+          rows.push([o.lat, o.lon, o.alt, o.tier, o.time? o.time.toISOString(): ""]);
+        }
+      });
+      downloadCSV(rows, "filtered_points.csv");
+    });
+
+    // Wire UI
+    document.getElementById('altitude-filter').addEventListener('change', debounce(applyFilters, 150));
+    document.getElementById('cluster-toggle').addEventListener('change', applyFilters);
+    document.getElementById('heat-toggle').addEventListener('change', applyFilters);
+    document.getElementById('recent-mins').addEventListener('change', debounce(applyFilters, 150));
 
     // Load data
     Promise.all([loadAltitudeCSV(), loadWindCSV()]).then(([altRows, windRows])=>{
       buildPoints(altRows);
       buildWindMarkers(windRows);
       applyFilters();
-      rebuildRiskZones();
     }).catch(err=>{
       console.error('Data load error:', err);
       alert('Failed to load data from GitHub CSV. Check network or URLs.');
     });
   </script>
 </body>
-</html>
-''', height=800, scrolling=True)
+</html>''', height=800, scrolling=True)
