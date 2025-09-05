@@ -8,9 +8,7 @@ st.caption(
     "strike summary, CSV download, and optional auto-refresh."
 )
 
-# Embed the HTML/JS Leaflet app
-st_html(
-    '''<!DOCTYPE html>
+st_html('''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -142,30 +140,180 @@ st_html(
         <div class="footer-note">
           Data pulled via CSV from GitHub; tiles © OpenStreetMap. Use for awareness; confirm with official guidance.
         </div>
-      </aside>
+      </fieldset>
+    </aside>
 
-      <div id="map">
-        <div class="summary" id="summary">
-          <h4>Strike Summary</h4>
-          <div class="stat"><span>Total (all data):</span><strong id="sum-total">0</strong></div>
-          <div class="stat"><span>Visible (filters):</span><strong id="sum-visible">0</strong></div>
-          <hr>
-          <div class="stat"><span>&lt; 12 km:</span><strong id="sum-low">0</strong></div>
-          <div class="stat"><span>12–14 km:</span><strong id="sum-med">0</strong></div>
-          <div class="stat"><span>14–16 km:</span><strong id="sum-high">0</strong></div>
-          <div class="stat"><span>&gt; 16 km:</span><strong id="sum-extreme">0</strong></div>
-        </div>
+    <div id="map">
+      <div class="summary" id="summary">
+        <h4>Strike Summary</h4>
+        <div class="stat"><span>Total (all data):</span><strong id="sum-total">0</strong></div>
+        <div class="stat"><span>Visible (filters):</span><strong id="sum-visible">0</strong></div>
+        <hr>
+        <div class="stat"><span>&lt; 12 km:</span><strong id="sum-low">0</strong></div>
+        <div class="stat"><span>12–14 km:</span><strong id="sum-med">0</strong></div>
+        <div class="stat"><span>14–16 km:</span><strong id="sum-high">0</strong></div>
+        <div class="stat"><span>&gt; 16 km:</span><strong id="sum-extreme">0</strong></div>
       </div>
     </div>
+  </div>
 
-    <div class="legend" id="legend">
-      <div class="legend-item"><span class="color-box" style="background:#ffe633;"></span> &lt; 12 km (Low)</div>
-      <div class="legend-item"><span class="color-box" style="background:#ffc300;"></span> 12–14 km (Medium)</div>
-      <div class="legend-item"><span class="color-box" style="background:#ff5733;"></span> 14–16 km (High / Danger)</div>
-      <div class="legend-item"><span class="color-box" style="background:#c70039;"></span> &gt; 16 km (Extreme)</div>
-    </div>
+  <div class="legend" id="legend">
+    <div class="legend-item"><span class="color-box" style="background:#ffe633;"></span> &lt; 12 km (Low)</div>
+    <div class="legend-item"><span class="color-box" style="background:#ffc300;"></span> 12–14 km (Medium)</div>
+    <div class="legend-item"><span class="color-box" style="background:#ff5733;"></span> 14–16 km (High / Danger)</div>
+    <div class="legend-item"><span class="color-box" style="background:#c70039;"></span> &gt; 16 km (Extreme)</div>
+  </div>
+
+  <script>
+    let map, clusterGroup, plainGroup, heatLayer, windLayer;
+    let allMarkers = []; // {marker, alt, time?, lat, lon, tier}
+    let refreshTimer = null;
+
+    // Risk helpers
+    function riskColor(alt){ if (alt < 12000) return '#ffe633'; if (alt < 14000) return '#ffc300'; if (alt < 16000) return '#ff5733'; return '#c70039'; }
+    function riskTier(alt){ if (alt < 12000) return 'low'; if (alt < 14000) return 'med'; if (alt < 16000) return 'high'; return 'extreme'; }
+
+    // Debounce
+    function debounce(fn, ms){ let t; return function(){ clearTimeout(t); t = setTimeout(()=>fn.apply(this, arguments), ms); }; }
+
+    // CSV loaders
+    function loadAltitudeCSV(){
+      return new Promise((resolve, reject)=>{
+        Papa.parse('https://raw.githubusercontent.com/kyo330/HLMA/main/filtered_LYLOUT_230924_210000_0600.csv', {
+          download:true, header:true, complete: (res)=>resolve(res.data), error: reject
+        });
+      });
+    }
+    function loadWindCSV(){
+      return new Promise((resolve, reject)=>{
+        Papa.parse('https://raw.githubusercontent.com/kyo330/HLMA/main/230924_rpts_wind.csv', {
+          download:true, header:true, complete: (res)=>resolve(res.data), error: reject
+        });
+      });
+    }
+
+    // Parse time if present
+    function parseTime(val){
+      if (!val) return null;
+      if (!isNaN(val)) { const n = Number(val); if (n > 1e10) return new Date(n); }
+      const d = new Date(val); return isNaN(d.getTime()) ? null : d;
+    }
+
+    function initMap(){
+      map = L.map('map').setView([30.7, -95.2], 8);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+      clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 12 });
+      plainGroup = L.layerGroup(); windLayer = L.layerGroup().addTo(map);
+      setTimeout(()=>{ map.invalidateSize(); }, 300);
+    }
+
+    // Build points
+    function buildPoints(rows){
+      allMarkers = []; clusterGroup.clearLayers(); plainGroup.clearLayers();
+      rows.forEach(r=>{
+        const lat = parseFloat(r.lat), lon = parseFloat(r.lon), alt = parseFloat(r.alt), t = parseTime(r.time);
+        if (isNaN(lat) || isNaN(lon) || isNaN(alt)) return;
+        const color = riskColor(alt), tier = riskTier(alt);
+        const m = L.circleMarker([lat, lon], { radius: tier==='low'?3:tier==='med'?5:tier==='high'?7:9, color, fillColor: color, fillOpacity: 0.85, opacity: 1, weight: 1 })
+          .bindPopup(`<b>Altitude:</b> ${alt} m<br><b>Tier:</b> ${tier.toUpperCase()}<br>` + (t? `<b>Time:</b> ${t.toISOString()}<br>`:'' ) + `(${lat.toFixed(3)}, ${lon.toFixed(3)})`);
+        allMarkers.push({marker: m, alt, time: t, lat, lon, tier});
+      });
+      allMarkers.forEach(o=>clusterGroup.addLayer(o.marker));
+      if (!map.hasLayer(clusterGroup)) clusterGroup.addTo(map);
+      document.getElementById('sum-total').textContent = allMarkers.length;
+    }
+
+    // Wind markers
+    function buildWindMarkers(rows){
+      windLayer.clearLayers();
+      rows.forEach(r=>{
+        const lat = parseFloat(r.Lat), lon = parseFloat(r.Lon), comments = r.Comments;
+        if (isNaN(lat) || isNaN(lon)) return;
+        L.marker([lat, lon], { icon: L.divIcon({ className:'wind-icon', html:'<span style="color:blue; font-weight:700; font-size:20px;">W</span>', iconSize:[24,24], iconAnchor:[12,12] }) })
+          .bindPopup(`<b>Wind Event:</b> ${comments || 'N/A'}<br>(${lat.toFixed(3)}, ${lon.toFixed(3)})`)
+          .addTo(windLayer);
+      });
+    }
+
+    // Filters
+    function passAltitude(alt, range){ if (range==='lt12') return alt<12000; if (range==='12-14') return alt>=12000 && alt<14000; if (range==='14-16') return alt>=14000 && alt<16000; if (range==='gt16') return alt>=16000; return true; }
+    function passRecent(t, mins){ if (!mins || mins<=0 || !t) return true; const now = new Date(), cutoff = new Date(now.getTime() - mins*60*1000); return t >= cutoff; }
+
+    function applyFilters(){
+      const altRange = document.getElementById('altitude-filter').value;
+      const cluster = document.getElementById('cluster-toggle').value === 'on';
+      const heat = document.getElementById('heat-toggle').value === 'on';
+      const mins = parseInt(document.getElementById('recent-mins').value || '0', 10);
+
+      clusterGroup.clearLayers(); plainGroup.clearLayers();
+      if (heatLayer){ map.removeLayer(heatLayer); heatLayer = null; }
+
+      const ptsForHeat = []; let visible=0, cLow=0, cMed=0, cHigh=0, cExtreme=0;
+
+      allMarkers.forEach(o=>{
+        const ok = passAltitude(o.alt, altRange) && passRecent(o.time, mins);
+        if (ok){
+          visible++; if (o.tier==='low') cLow++; else if (o.tier==='med') cMed++; else if (o.tier==='high') cHigh++; else cExtreme++;
+          if (cluster) clusterGroup.addLayer(o.marker); else plainGroup.addLayer(o.marker);
+          ptsForHeat.push([o.lat, o.lon, 0.5 + Math.min(1, Math.max(0, (o.alt-10000)/8000)) ]);
+        }
+      });
+
+      if (cluster){ if (!map.hasLayer(clusterGroup)) clusterGroup.addTo(map); if (map.hasLayer(plainGroup)) map.removeLayer(plainGroup); }
+      else { if (!map.hasLayer(plainGroup)) plainGroup.addTo(map); if (map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup); }
+
+      if (heat){ heatLayer = L.heatLayer(ptsForHeat, { radius: 25, blur: 20, maxZoom: 11 }); heatLayer.addTo(map); }
+
+      document.getElementById('sum-visible').textContent = visible;
+      document.getElementById('sum-low').textContent = cLow;
+      document.getElementById('sum-med').textContent = cMed;
+      document.getElementById('sum-high').textContent = cHigh;
+      document.getElementById('sum-extreme').textContent = cExtreme;
+
+      setTimeout(()=>{ map.invalidateSize(); }, 150);
+    }
+
+    // CSV download
+    function downloadCSV(rows, filename) {
+      const csvContent = rows.map(r => r.map(x => (typeof x === 'string' && x.includes(',')) ? ('"' + x.replace(/"/g,'""') + '"') : x).join(",")).join("\\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
+    document.getElementById('download-points').addEventListener('click', ()=>{
+      const altRange = document.getElementById('altitude-filter').value;
+      const mins = parseInt(document.getElementById('recent-mins').value || '0', 10);
+      const rows = [["lat","lon","altitude_m","tier","time_iso"]];
+      allMarkers.forEach(o=>{ if (passAltitude(o.alt, altRange) && passRecent(o.time, mins)) rows.push([o.lat, o.lon, o.alt, o.tier, o.time? o.time.toISOString(): ""]); });
+      downloadCSV(rows, "filtered_points.csv");
+    });
+
+    // Auto-refresh
+    function setAutoRefresh(enabled, seconds){
+      const note = document.getElementById('refresh-note');
+      if (refreshTimer){ clearInterval(refreshTimer); refreshTimer = null; }
+      if (!enabled){ note.textContent = 'Auto-refresh is off.'; return; }
+      note.textContent = 'Auto-refresh every ' + seconds + ' seconds.';
+      refreshTimer = setInterval(()=>{ reloadData(); }, Math.max(30, seconds) * 1000);
+    }
+
+    function reloadData(){
+      Promise.all([loadAltitudeCSV(), loadWindCSV()]).then(([altRows, windRows])=>{
+        buildPoints(altRows); buildWindMarkers(windRows); applyFilters();
+      }).catch(err=>{ console.error('Data reload error:', err); });
+    }
+
+    // UI wiring
+    document.getElementById('altitude-filter').addEventListener('change', debounce(applyFilters, 150));
+    document.getElementById('cluster-toggle').addEventListener('change', applyFilters);
+    document.getElementById('heat-toggle').addEventListener('change', applyFilters);
+    document.getElementById('recent-mins').addEventListener('change', debounce(applyFilters, 150));
+    document.getElementById('auto-refresh').addEventListener('change', ()=>{ const on = document.getElementById('auto-refresh').value==='on'; const sec = parseInt(document.getElementById('refresh-sec').value||'120',10); setAutoRefresh(on, sec); });
+    document.getElementById('refresh-sec').addEventListener('change', ()=>{ const on = document.getElementById('auto-refresh').value==='on'; const sec = parseInt(document.getElementById('refresh-sec').value||'120',10); setAutoRefresh(on, sec); });
+
+    // Boot
+    window.addEventListener('load', ()=>{ initMap(); reloadData(); });
+  </script>
 </body>
-</html>''',
-    height=900,
-    scrolling=True
-)
+</html>
+''', height=900, scrolling=True)
