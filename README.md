@@ -1,4 +1,4 @@
-# 3D Overshooting Explorer (Streamlit)
+# 3D Overshooting Explorer 
 
 A streamlined Streamlit app to visualize overshooting points in 2D and 3D.
 
@@ -21,4 +21,4 @@ streamlit run app.py
 - **alt**: altitude (e.g., km)
 - **is_overshooting** (optional): boolean or 0/1
 
-If your column names differ, use the column mapping UI.
+
